@@ -1,0 +1,10 @@
+{
+  "providerId": "ollama-router",
+  "maxRetries": 5,
+  "failWindowMs": 18000000,
+  "keys": [
+    "sk-your-first-api-key",
+    "sk-your-second-api-key",
+    "sk-your-third-api-key"
+  ]
+}
