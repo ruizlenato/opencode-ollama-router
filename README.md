@@ -53,6 +53,7 @@ opencode-ollama-router-setup
 |--------|------|---------|-------------|
 | `keys` | string[] | `[]` | Array of API keys to rotate through |
 | `providerId` | string | `"ollama-router"` | Provider ID to intercept |
+| `maxRetries` | number | `1` | How many times to retry the same key before moving to the next |
 | `failWindowMs` | number | `18000000` | Time in ms before retrying a failed key (5 hours) |
 
 ## Environment Variables
@@ -72,9 +73,17 @@ Environment keys are merged with keys from the config file.
 1. Plugin intercepts all `fetch` calls to the configured provider
 2. Selects a key from your list (randomized order for fair distribution)
 3. Adds `Authorization: Bearer <key>` header
-4. On error (401, 403, 429), marks key as failed and tries next
-5. Subscription errors (e.g., "model requires subscription") are detected and skipped
-6. Failed keys recover after `failWindowMs` expires
+4. On error (401, 403, 429), retries the same key up to `maxRetries` times
+5. After exhausting retries, moves to the next key
+6. Subscription errors (e.g., "model requires subscription") are detected and skipped immediately
+7. Failed keys recover after `failWindowMs` expires
+
+### Retry Behavior
+
+- `maxRetries: 1` (default): Try a key once, if it fails, move to next key
+- `maxRetries: 3`: Try the same key up to 3 times before moving to next key
+
+This helps handle transient errors without unnecessary key rotation.
 
 ## Error Messages
 

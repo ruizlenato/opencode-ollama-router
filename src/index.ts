@@ -5,7 +5,7 @@ import { join } from "path";
 import { homedir } from "os";
 
 const DEFAULT_PROVIDER_ID = "ollama-router";
-const DEFAULT_MAX_RETRIES = 5;
+const DEFAULT_MAX_RETRIES = 1;
 const DEFAULT_FAIL_WINDOW_MS = 18000000;
 const AUTH_JSON_PATH = join(
   homedir(),
@@ -344,65 +344,74 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
             for (const { index, key } of shuffledKeys) {
               currentKeyIndex = index;
 
-              await log(
-                "info",
-                `Using ${currentKeyIndex + 1}º key (${getMaskedKeyPreview(key)})`,
-                {
-                  keyIndex: currentKeyIndex + 1,
-                  totalKeys: uniqueKeys.length,
-                },
-              );
+              for (let retry = 0; retry < maxRetries; retry++) {
+                const isRetry = retry > 0;
 
-              if (lastToastKeyIndex !== currentKeyIndex) {
-                await showToast(
-                  "info",
-                  `Using ${currentKeyIndex + 1}º key (${getMaskedKeyPreview(key)}...)`,
-                );
-                lastToastKeyIndex = currentKeyIndex;
-              }
+                if (isRetry) {
+                  await log("info", `Retry ${retry}/${maxRetries - 1} for key ${getMaskedKeyPreview(key)}`, {
+                    keyIndex: currentKeyIndex + 1, retry, maxRetries
+                  });
+                } else {
+                  await log(
+                    "info",
+                    `Trying key ${currentKeyIndex + 1}/${uniqueKeys.length} (${getMaskedKeyPreview(key)})`,
+                    {
+                      keyIndex: currentKeyIndex + 1,
+                      totalKeys: uniqueKeys.length,
+                    },
+                  );
 
-              const headers = new Headers(init?.headers);
-              headers.delete("authorization");
-              headers.delete("Authorization");
-              headers.set("Authorization", `Bearer ${key}`);
+                  if (lastToastKeyIndex !== currentKeyIndex) {
+                    await showToast(
+                      "info",
+                      `Using key ${getMaskedKeyPreview(key)}...`,
+                    );
+                    lastToastKeyIndex = currentKeyIndex;
+                  }
+                }
 
-              const response = await fetch(input, { ...init, headers, signal });
+                const headers = new Headers(init?.headers);
+                headers.delete("authorization");
+                headers.delete("Authorization");
+                headers.set("Authorization", `Bearer ${key}`);
 
-              let responseBody = "";
-              let responseClone: Response | null = null;
-              try {
-                responseBody = await response.text();
-                responseClone = new Response(responseBody, {
-                  status: response.status,
-                  statusText: response.statusText,
-                  headers: response.headers,
-                });
-              } catch {
-                responseClone = response;
-              }
+                const response = await fetch(input, { ...init, headers, signal });
 
-              if (responseClone.status >= 500 || responseClone.status === 200) {
-                await log(
-                  "info",
-                  `Response status ${responseClone.status} with ${currentKeyIndex + 1}º key`,
-                  {
-                    status: responseClone.status,
-                    keyIndex: currentKeyIndex + 1,
-                    body: responseBody.slice(0, 300),
-                  },
-                );
-              } else {
-                await log(
-                  "info",
-                  `Response status ${responseClone.status} with ${currentKeyIndex + 1}º key`,
-                  {
-                    status: responseClone.status,
-                    keyIndex: currentKeyIndex + 1,
-                  },
-                );
-              }
+                let responseBody = "";
+                let responseClone: Response | null = null;
+                try {
+                  responseBody = await response.text();
+                  responseClone = new Response(responseBody, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: response.headers,
+                  });
+                } catch {
+                  responseClone = response;
+                }
 
-              if (isAuthErrorByStatus(responseClone.status)) {
+                if (responseClone.status >= 500 || responseClone.status === 200) {
+                  await log(
+                    "info",
+                    `Response status ${responseClone.status}`,
+                    {
+                      status: responseClone.status,
+                      keyIndex: currentKeyIndex + 1,
+                      body: responseBody.slice(0, 300),
+                    },
+                  );
+                } else {
+                  await log(
+                    "info",
+                    `Response status ${responseClone.status}`,
+                    {
+                      status: responseClone.status,
+                      keyIndex: currentKeyIndex + 1,
+                    },
+                  );
+                }
+
+                if (isAuthErrorByStatus(responseClone.status)) {
                 const isSubscriptionError = responseBody.includes(
                   "this model requires a subscription",
                 );
@@ -443,60 +452,60 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
                 }
 
                 keyErrors.push({
-                  index: currentKeyIndex,
-                  key: getMaskedKeyPreview(key),
-                  status: responseClone.status,
-                  message: isSubscriptionError
-                    ? `subscription_error: ref=${responseBody.match(/ref: ([^)]+)/)?.[1] || "unknown"}`
-                    : `auth_error_${responseClone.status}`,
-                });
+                    index: currentKeyIndex,
+                    key: getMaskedKeyPreview(key),
+                    status: responseClone.status,
+                    message: isSubscriptionError
+                      ? `subscription_error: ref=${responseBody.match(/ref: ([^)]+)/)?.[1] || "unknown"}`
+                      : `auth_error_${responseClone.status}`,
+                  });
 
-                if (failedKeys.size >= uniqueKeys.length) {
-                  const summary = keyErrors.length;
-                  const subscriptionCount = keyErrors.filter((e) =>
-                    e.message.includes("subscription_error"),
-                  ).length;
-                  const rateLimitCount = keyErrors.filter(
-                    (e) => e.status === 429,
-                  ).length;
-                  const otherCount =
-                    summary - subscriptionCount - rateLimitCount;
+                  if (failedKeys.size >= uniqueKeys.length) {
+                    const summary = keyErrors.length;
+                    const subscriptionCount = keyErrors.filter((e) =>
+                      e.message.includes("subscription_error"),
+                    ).length;
+                    const rateLimitCount = keyErrors.filter(
+                      (e) => e.status === 429,
+                    ).length;
+                    const otherCount =
+                      summary - subscriptionCount - rateLimitCount;
 
-                  const detailList = keyErrors
-                    .map(
-                      (e, i) =>
-                        `  ${i + 1}. key${e.index + 1} (${e.key}...) - ${e.status}\n     ${e.message}`,
-                    )
-                    .join("\n\n");
+                    const detailList = keyErrors
+                      .map(
+                        (e, i) =>
+                          `  ${i + 1}. key${e.index + 1} (${e.key}...) - ${e.status}\n     ${e.message}`,
+                      )
+                      .join("\n\n");
 
-                  let reason = "unknown";
-                  if (subscriptionCount === summary)
-                    reason =
-                      "keys have no model access (subscription required)";
-                  else if (rateLimitCount === summary)
-                    reason = "all keys are rate-limited";
+                    let reason = "unknown";
+                    if (subscriptionCount === summary)
+                      reason =
+                        "keys have no model access (subscription required)";
+                    else if (rateLimitCount === summary)
+                      reason = "all keys are rate-limited";
 
-                  const fullMessage = [
-                    `[${providerId}] ALL KEYS EXHAUSTED!`,
-                    `Summary: ${summary} keys failed.`,
-                    `${subscriptionCount} no model access, ${rateLimitCount} rate-limited, ${otherCount} other errors.`,
-                    reason !== "unknown" ? `Reason: ${reason}` : "",
-                    "",
-                    `Details:\n${detailList}`,
-                  ]
-                    .filter(Boolean)
-                    .join("\n");
+                    const fullMessage = [
+                      `[${providerId}] ALL KEYS EXHAUSTED!`,
+                      `Summary: ${summary} keys failed.`,
+                      `${subscriptionCount} no model access, ${rateLimitCount} rate-limited, ${otherCount} other errors.`,
+                      reason !== "unknown" ? `Reason: ${reason}` : "",
+                      "",
+                      `Details:\n${detailList}`,
+                    ]
+                      .filter(Boolean)
+                      .join("\n");
 
-                  throw new Error(fullMessage);
+                    throw new Error(fullMessage);
+                  }
+
+                  continue;
                 }
 
-                continue;
+                await updateKey(key, providerId);
+                await log("debug", `Request successful with key ${getMaskedKeyPreview(key)}`);
+                return responseClone;
               }
-
-              await updateKey(key, providerId);
-              await log("debug", `Request successful with key ${getMaskedKeyPreview(key)}`);
-
-              return responseClone;
             }
 
             throw new Error(
