@@ -1,0 +1,52 @@
+{
+  "name": "opencode-ollama-router",
+  "version": "1.0.0",
+  "description": "Smart API key router for OpenCode - Ollama Cloud with automatic failover, subscription detection, and intelligent rotation",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "bin": {
+    "opencode-ollama-router-setup": "./scripts/setup.js"
+  },
+  "files": [
+    "dist",
+    "scripts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ruizlenato/opencode-ollama-router.git"
+  },
+  "keywords": [
+    "opencode",
+    "ollama",
+    "ollama-cloud",
+    "api-key",
+    "router",
+    "failover",
+    "rotation"
+  ],
+  "author": "ruizlenato",
+  "license": "GPL-3.0",
+  "bugs": {
+    "url": "https://github.com/ruizlenato/opencode-ollama-router/issues"
+  },
+  "homepage": "https://github.com/ruizlenato/opencode-ollama-router#readme"
+}

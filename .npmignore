@@ -1,0 +1,8 @@
+.git
+.gitignore
+node_modules
+*.ts
+!*.d.ts
+tsconfig.json
+opencode.json.example
+.env
