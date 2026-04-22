@@ -15,14 +15,22 @@ Smart API key router for OpenCode's Ollama Cloud integration. Automatically rota
 - **Comprehensive Logging** - Logs all requests with status codes
 - **Toast Notifications** - Visual feedback when keys rotate or fail
 
-## Installation (GitHub)
+## Installation
 
-Clone and install:
+### From NPM (recommended)
+
+```bash
+npm install -g opencode-ollama-router
+opencode-ollama-router-setup
+```
+
+### From GitHub
 
 ```bash
 git clone https://github.com/ruizlenato/opencode-ollama-router.git
 cd opencode-ollama-router
 npm install -g .
+opencode-ollama-router-setup
 ```
 
 ## Configuration
