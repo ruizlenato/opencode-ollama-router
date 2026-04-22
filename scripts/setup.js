@@ -170,15 +170,22 @@ async function setupPlugin() {
   );
 
   if (!hasPlugin) {
-    existingConfig.model = existingConfig.model || "ollama-router/kimi-k2.5";
+    existingConfig.model = existingConfig.model || "ollama-router/minimax-m2.7";
     existingConfig.provider = existingConfig.provider || {};
     existingConfig.provider["ollama-router"] = {
       npm: "@ai-sdk/openai-compatible",
       options: { baseURL: "https://ollama.com/v1" },
       models: {
-        "kimi-k2.5": { id: "kimi-k2.5", name: "Kimi K2.5", family: "kimi" },
-        "qwen3.5:397b": { id: "qwen3.5:397b", name: "Qwen 3.5 397B", family: "qwen" },
-        "gemma4:31b-cloud": { id: "gemma4:31b-cloud", name: "Gemma 4 31B", family: "gemma" },
+        "minimax-m2.7": { id: "minimax-m2.7", name: "MiniMax M2.7", family: "minimax" },
+        "qwen3-coder-next": { id: "qwen3-coder-next", name: "Qwen3 Coder Next", family: "qwen" },
+        "gpt-oss:120b": { id: "gpt-oss:120b", name: "GPT OSS 120B", family: "gpt" },
+        "mistral-large-3:675b": { id: "mistral-large-3:675b", name: "Mistral Large 3 675B", family: "mistral" },
+        "glm-4.7": { id: "glm-4.7", name: "GLM 4.7", family: "glm" },
+        "qwen3-next:80b": { id: "qwen3-next:80b", name: "Qwen3 Next 80B", family: "qwen" },
+        "gemma4:31b": { id: "gemma4:31b", name: "Gemma 4 31B", family: "gemma" },
+        "deepseek-v3.2": { id: "deepseek-v3.2", name: "DeepSeek V3.2", family: "deepseek" },
+        "devstral-small-2:24b": { id: "devstral-small-2:24b", name: "Devstral Small 2 24B", family: "devstral" },
+        "gemini-3-flash-preview": { id: "gemini-3-flash-preview", name: "Gemini 3 Flash Preview", family: "gemini" },
       },
     };
 

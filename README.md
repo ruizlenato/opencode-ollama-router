@@ -32,6 +32,7 @@ npm install -g .
 ```json
 {
   "providerId": "ollama-router",
+  "maxRetries": 1,
   "failWindowMs": 18000000,
   "keys": [
     "your-ollama-api-key-1",
@@ -46,6 +47,23 @@ Or run the setup script:
 ```bash
 opencode-ollama-router-setup
 ```
+
+### Available Models
+
+The plugin comes pre-configured with these models:
+
+| Model ID | Name |
+|----------|------|
+| `minimax-m2.7` | MiniMax M2.7 |
+| `qwen3-coder-next` | Qwen3 Coder Next |
+| `gpt-oss:120b` | GPT OSS 120B |
+| `mistral-large-3:675b` | Mistral Large 3 675B |
+| `glm-4.7` | GLM 4.7 |
+| `qwen3-next:80b` | Qwen3 Next 80B |
+| `gemma4:31b` | Gemma 4 31B |
+| `deepseek-v3.2` | DeepSeek V3.2 |
+| `devstral-small-2:24b` | Devstral Small 2 24B |
+| `gemini-3-flash-preview` | Gemini 3 Flash Preview |
 
 ## Configuration Options
 
