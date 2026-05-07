@@ -58,20 +58,9 @@ opencode-ollama-router-setup
 
 ### Available Models
 
-The plugin comes pre-configured with these models:
+Models are **fetched dynamically** from the [Ollama API](https://ollama.com/api/tags) when the setup script runs. No hardcoded model list — you always get the latest available models.
 
-| Model ID | Name |
-|----------|------|
-| `minimax-m2.7` | MiniMax M2.7 |
-| `qwen3-coder-next` | Qwen3 Coder Next |
-| `gpt-oss:120b` | GPT OSS 120B |
-| `mistral-large-3:675b` | Mistral Large 3 675B |
-| `glm-4.7` | GLM 4.7 |
-| `qwen3-next:80b` | Qwen3 Next 80B |
-| `gemma4:31b` | Gemma 4 31B |
-| `deepseek-v3.2` | DeepSeek V3.2 |
-| `devstral-small-2:24b` | Devstral Small 2 24B |
-| `gemini-3-flash-preview` | Gemini 3 Flash Preview |
+After adding your API keys, use **option 5 (Refresh models)** in the setup menu to sync the latest model list into `opencode.json`.
 
 ## Configuration Options
 
