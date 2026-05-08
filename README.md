@@ -3,7 +3,7 @@
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://opensource.org/licenses/GPL-3.0)
 [![GitHub](https://img.shields.io/badge/GitHub-ruizlenato/opencode--ollama--router-blue)](https://github.com/ruizlenato/opencode-ollama-router)
 
-Smart API key router for OpenCode's Ollama Cloud integration. Automatically rotates through multiple API keys with intelligent failover, subscription error detection, and automatic quota management.
+Smart API key router for OpenCode's Ollama Cloud integration. Automatically rotates through multiple API keys with intelligent failover, subscription error detection, automatic quota management, and dynamic model capability discovery.
 
 ## Features
 
@@ -12,6 +12,8 @@ Smart API key router for OpenCode's Ollama Cloud integration. Automatically rota
 - **Subscription Error Detection** - Detects "model requires a subscription" errors and skips those keys
 - **Auto Recovery** - Re-enables failed keys after configurable time (default: 5 hours)
 - **Random Key Rotation** - Rotates keys in random order to distribute load evenly
+- **Model Capability Discovery** - Automatically fetches model capabilities (vision, tool call, reasoning) and context window sizes from the Ollama API
+- **Context Usage Tracking** - Supplies context window sizes so OpenCode can display used context percentage
 - **Comprehensive Logging** - Logs all requests with status codes
 - **Toast Notifications** - Visual feedback when keys rotate or fail
 
@@ -58,9 +60,31 @@ opencode-ollama-router-setup
 
 ### Available Models
 
-Models are **fetched dynamically** from the [Ollama API](https://ollama.com/api/tags) when the setup script runs. No hardcoded model list — you always get the latest available models.
+Models are **fetched dynamically** from the [Ollama API](https://ollama.com/api/tags) when the setup script runs. Capabilities (vision, tool call, reasoning) and context window sizes are fetched from the `/api/show` endpoint for each model. No hardcoded model list — you always get the latest available models with accurate metadata.
 
-After adding your API keys, use **option 5 (Refresh models)** in the setup menu to sync the latest model list into `opencode.json`.
+After adding your API keys, use **option 5 (Refresh models)** in the setup menu to re-sync the latest model list and capabilities into `opencode.json`.
+
+## How Model Capabilities Work
+
+The plugin uses a **two-layer approach** to supply model metadata to OpenCode:
+
+### 1. Static config (setup script → `opencode.json`)
+
+When you run the setup script or refresh models, it:
+- Fetches the model list from `/api/tags`
+- For each model, calls `/api/show` to get capabilities and context length
+- Maps Ollama capabilities to OpenCode fields:
+
+| Ollama capability | OpenCode field |
+|---|---|
+| `vision` | `attachment: true`, `modalities.input` includes `"image"` |
+| `tools` | `tool_call: true` |
+| `thinking` | `reasoning: true`, `interleaved: { field: "reasoning_content" }` |
+| `<arch>.context_length` | `limit.context` (enables context usage % display) |
+
+### 2. Dynamic provider hook (runtime)
+
+The plugin registers a `provider` hook that fetches capabilities from the Ollama API at runtime, results cached for 5 minutes. This ensures capabilities stay current even if models change after setup.
 
 ## Configuration Options
 
@@ -84,6 +108,8 @@ OLLAMA_API_KEY_2="your-third-key"
 Environment keys are merged with keys from the config file.
 
 ## How It Works
+
+### Key rotation
 
 1. Plugin intercepts all `fetch` calls to the configured provider
 2. Selects a key from your list (randomized order for fair distribution)
@@ -118,11 +144,16 @@ Details:
   ...
 ```
 
-## State Files
+## File Locations
 
-The plugin manages these files:
+| Path | Purpose |
+|------|---------|
+| `~/.config/opencode/ollama-router.json` | Plugin config (keys, retry settings, failed-key state) |
+| `~/.config/opencode/ollama-router.jsonc` | Same, with JSONC support (preferred if present) |
+| `~/.local/share/opencode/auth.json` | OpenCode auth — plugin writes active key here |
+| `~/.config/opencode/opencode.json` | OpenCode app config — setup script registers provider + models here |
 
-- `~/.config/opencode/ollama-router.json` - Configuration and key failure state
+The plugin reads config keys and env vars (`OLLAMA_API_KEY`, `OLLAMA_API_KEY_1`, …), deduplicates, and merges them. Env keys come after config keys.
 
 ## Debugging
 
