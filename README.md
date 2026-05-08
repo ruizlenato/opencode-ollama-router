@@ -120,6 +120,22 @@ Environment keys are merged with keys from the config file.
 6. Subscription errors (e.g., "model requires subscription") are detected and skipped immediately
 7. Failed keys recover after `failWindowMs` expires
 
+### Toggling key order
+
+By default, keys are shuffled randomly on each request for even load distribution. To use keys in their configured array order instead:
+
+**Option A — Setup script:** Choose option 4 ("Configure options") and set random key rotation to `n`.
+
+**Option B — Config file:** Set `shuffle` to `false` in `~/.config/opencode/ollama-router.json`:
+
+```json
+{
+  "shuffle": false
+}
+```
+
+When `shuffle` is disabled, keys are tried top-to-bottom in the order they appear in the `keys` array.
+
 ### Retry Behavior
 
 - `maxRetries: 1` (default): Try a key once, if it fails, move to next key
