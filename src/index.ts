@@ -1,4 +1,5 @@
-import { Plugin } from "@opencode-ai/plugin";
+import { Plugin, type ProviderHookContext } from "@opencode-ai/plugin";
+import type { Provider as ProviderV2, Model as ModelV2 } from "@opencode-ai/sdk/v2";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
@@ -27,6 +28,23 @@ const PLUGIN_CONFIG_JSONC_PATH = join(
   "opencode",
   "ollama-router.jsonc",
 );
+
+const OLLAMA_API_BASE = "https://ollama.com";
+
+/** Model info returned by Ollama /api/show */
+interface OllamaModelShow {
+  capabilities?: string[];
+  model_info?: Record<string, number | string>;
+  details?: {
+    family?: string;
+    parameter_size?: string;
+  };
+}
+
+/** Cache for model capabilities fetched from Ollama API */
+let modelsCache: Record<string, OllamaModelShow> | null = null;
+let modelsCacheExpiry = 0;
+const MODELS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 interface OllamaRouterAuthConfig {
   keys?: string[];
@@ -226,6 +244,140 @@ function shuffleArray<T>(array: T[]): T[] {
   return shuffled;
 }
 
+async function fetchModelShow(
+  modelName: string,
+  apiKey: string,
+): Promise<OllamaModelShow | null> {
+  try {
+    const res = await fetch(`${OLLAMA_API_BASE}/api/show`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ name: modelName }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAvailableModels(
+  apiKey: string,
+): Promise<Array<{ name: string; model?: string }> | null> {
+  try {
+    const headers: Record<string, string> = {};
+    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+    const res = await fetch(`${OLLAMA_API_BASE}/api/tags`, { headers });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data.models)) return null;
+    return data.models;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAllModelCapabilities(
+  apiKey: string,
+): Promise<Record<string, OllamaModelShow>> {
+  const now = Date.now();
+  if (modelsCache && now < modelsCacheExpiry) return modelsCache;
+
+  const models = await fetchAvailableModels(apiKey);
+  if (!models) return modelsCache || {};
+
+  const results: Record<string, OllamaModelShow> = {};
+  await Promise.all(
+    models.map(async (m) => {
+      const name = m.name || m.model;
+      if (!name) return;
+      const show = await fetchModelShow(name, apiKey);
+      if (show) results[name] = show;
+    }),
+  );
+
+  modelsCache = results;
+  modelsCacheExpiry = now + MODELS_CACHE_TTL;
+  return results;
+}
+
+/**
+ * Convert Ollama API capabilities + model_info into an OpenCode model definition
+ * with full capability metadata.
+ */
+function buildModelEntry(
+  modelId: string,
+  show: OllamaModelShow | null,
+  staticEntry: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const caps = show?.capabilities || [];
+  const modelInfo = show?.model_info || {};
+  const family = show?.details?.family || (modelId.split(/[:/-]/)[0]?.toLowerCase());
+
+  // Derive context length from model_info (arch-specific key like "glm5.1.context_length")
+  let contextLength = 0;
+  for (const [key, value] of Object.entries(modelInfo)) {
+    if (key.endsWith(".context_length") && typeof value === "number") {
+      contextLength = value;
+      break;
+    }
+  }
+
+  // Start with static config values (from opencode.json) as the base
+  const entry: Record<string, unknown> = {
+    id: modelId,
+    family,
+    ...(staticEntry || {}),
+  };
+
+  // Name: use static if set, else derive from model ID
+  if (!entry.name) {
+    entry.name = modelId
+      .split(":")[0]
+      .replace(/[-_]/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  // Capabilities from Ollama API
+  const hasVision = caps.includes("vision");
+  const hasTools = caps.includes("tools");
+  const hasThinking = caps.includes("thinking");
+
+  // Only override if static config doesn't already set these explicitly
+  if (entry.attachment === undefined) entry.attachment = hasVision;
+  if (entry.reasoning === undefined) entry.reasoning = hasThinking;
+  if (entry.tool_call === undefined) entry.tool_call = hasTools;
+  if (entry.temperature === undefined) entry.temperature = true;
+
+  if (entry.interleaved === undefined && hasThinking) {
+    entry.interleaved = { field: "reasoning_content" };
+  }
+
+  // Modalities
+  if (entry.modalities === undefined) {
+    entry.modalities = {
+      input: ["text", ...(hasVision ? ["image" as const] : [])],
+      output: ["text"],
+    };
+  }
+
+  // Context length
+  if (contextLength > 0 && entry.limit === undefined) {
+    entry.limit = {
+      context: contextLength,
+      output: Math.min(contextLength, 16384),
+    };
+  } else if (contextLength > 0 && typeof entry.limit === "object") {
+    const limit = entry.limit as Record<string, unknown>;
+    if (!limit.context) limit.context = contextLength;
+  }
+
+  return entry;
+}
+
 export const OllamaRouterAuth: Plugin = async ({ client }) => {
   const config = await readPluginConfig();
   const providerId = config.providerId || DEFAULT_PROVIDER_ID;
@@ -236,6 +388,19 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
   const envKeys = getApiKeysFromEnv();
   const allKeys = [...configKeys, ...envKeys];
   const uniqueKeys = deduplicateKeys(allKeys);
+
+  // Read the opencode.json config to get current model list for provider enrichment
+  let staticModels: Record<string, Record<string, unknown>> = {};
+  try {
+    const opencodeJsonPath = join(homedir(), ".config", "opencode", "opencode.json");
+    if (existsSync(opencodeJsonPath)) {
+      const raw = await readFile(opencodeJsonPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      staticModels = parsed?.provider?.[providerId]?.models || {};
+    }
+  } catch {
+    // Non-critical — provider hook will use defaults
+  }
 
   if (uniqueKeys.length === 0) return {};
 
@@ -515,6 +680,84 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
         };
       },
       methods: [{ type: "api" as const, label: "Ollama Router API" }],
+    },
+    provider: {
+      id: providerId,
+      models: async (provider: ProviderV2, ctx: ProviderHookContext) => {
+        // Use the first available key for API calls
+        const authKey = ctx.auth?.type === "api" || ctx.auth?.type === "wellknown" ? (ctx.auth as { key: string }).key : "";
+        const apiKey = authKey || uniqueKeys[0] || "";
+        const caps = apiKey ? await fetchAllModelCapabilities(apiKey) : {};
+
+        const models: Record<string, ModelV2> = {};
+
+        // If we have static models from opencode.json, enrich them
+        // Otherwise build from what the Ollama API returned
+        const modelIds = Object.keys(staticModels).length > 0
+          ? Object.keys(staticModels)
+          : Object.keys(caps).length > 0
+            ? Object.keys(caps)
+            : [];
+
+        for (const modelId of modelIds) {
+          const show = caps[modelId] || null;
+          const staticEntry = staticModels[modelId];
+          const enriched = buildModelEntry(modelId, show, staticEntry as Record<string, unknown> | undefined);
+
+          models[modelId] = {
+            id: (enriched.id as string) || modelId,
+            providerID: providerId,
+            api: {
+              id: modelId,
+              url: "https://ollama.com/v1",
+              npm: "@ai-sdk/openai-compatible",
+            },
+            name: (enriched.name as string) || modelId,
+            family: (enriched.family as string) || undefined,
+            capabilities: {
+              temperature: (enriched.temperature as boolean) ?? true,
+              reasoning: (enriched.reasoning as boolean) ?? false,
+              attachment: (enriched.attachment as boolean) ?? false,
+              toolcall: (enriched.tool_call as boolean) ?? true,
+              input: {
+                text: true,
+                audio: false,
+                image: (enriched.attachment as boolean) ?? false,
+                video: false,
+                pdf: (enriched.attachment as boolean) ?? false,
+              },
+              output: {
+                text: true,
+                audio: false,
+                image: false,
+                video: false,
+                pdf: false,
+              },
+              interleaved: enriched.interleaved
+                ? (enriched.interleaved as boolean | { field: "reasoning_content" | "reasoning_details" })
+                : false,
+            },
+            cost: {
+              input: (enriched.cost as Record<string, unknown>)?.input as number || 0,
+              output: (enriched.cost as Record<string, unknown>)?.output as number || 0,
+              cache: {
+                read: (enriched.cost as Record<string, unknown>)?.cache_read as number || 0,
+                write: (enriched.cost as Record<string, unknown>)?.cache_write as number || 0,
+              },
+            },
+            limit: {
+              context: (enriched.limit as Record<string, unknown>)?.context as number || 0,
+              output: (enriched.limit as Record<string, unknown>)?.output as number || 4096,
+            },
+            status: "active",
+            options: {},
+            headers: {},
+            release_date: (enriched.release_date as string) || "",
+          } satisfies ModelV2;
+        }
+
+        return models;
+      },
     },
   };
 };

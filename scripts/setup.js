@@ -12,16 +12,16 @@ const PLUGIN_CONFIG_PATH = join(homedir(), ".config", "opencode", "ollama-router
 const IS_INTERACTIVE = Boolean(process.stdin.isTTY && process.stdout.isTTY);
 
 const FALLBACK_MODELS = {
-  "minimax-m2.7": { id: "minimax-m2.7", name: "MiniMax M2.7", family: "minimax" },
-  "qwen3-coder-next": { id: "qwen3-coder-next", name: "Qwen3 Coder Next", family: "qwen" },
-  "gpt-oss:120b": { id: "gpt-oss:120b", name: "GPT OSS 120B", family: "gpt" },
-  "mistral-large-3:675b": { id: "mistral-large-3:675b", name: "Mistral Large 3 675B", family: "mistral" },
-  "glm-4.7": { id: "glm-4.7", name: "GLM 4.7", family: "glm" },
-  "qwen3-next:80b": { id: "qwen3-next:80b", name: "Qwen3 Next 80B", family: "qwen" },
-  "gemma4:31b": { id: "gemma4:31b", name: "Gemma 4 31B", family: "gemma" },
-  "deepseek-v3.2": { id: "deepseek-v3.2", name: "DeepSeek V3.2", family: "deepseek" },
-  "devstral-small-2:24b": { id: "devstral-small-2:24b", name: "Devstral Small 2 24B", family: "devstral" },
-  "gemini-3-flash-preview": { id: "gemini-3-flash-preview", name: "Gemini 3 Flash Preview", family: "gemini" },
+  "minimax-m2.7": { id: "minimax-m2.7", name: "MiniMax M2.7", family: "minimax", reasoning: true, tool_call: true, attachment: false, limit: { context: 196608, output: 16384 } },
+  "qwen3-coder-next": { id: "qwen3-coder-next", name: "Qwen3 Coder Next", family: "qwen", reasoning: false, tool_call: true, attachment: false, limit: { context: 262144, output: 16384 } },
+  "gpt-oss:120b": { id: "gpt-oss:120b", name: "GPT OSS 120B", family: "gpt", reasoning: true, tool_call: true, attachment: false, limit: { context: 131072, output: 16384 } },
+  "mistral-large-3:675b": { id: "mistral-large-3:675b", name: "Mistral Large 3 675B", family: "mistral", reasoning: false, tool_call: true, attachment: true, limit: { context: 262144, output: 16384 } },
+  "glm-4.7": { id: "glm-4.7", name: "GLM 4.7", family: "glm", reasoning: true, tool_call: true, attachment: false, limit: { context: 202752, output: 16384 } },
+  "qwen3-next:80b": { id: "qwen3-next:80b", name: "Qwen3 Next 80B", family: "qwen", reasoning: true, tool_call: true, attachment: false, limit: { context: 262144, output: 16384 } },
+  "gemma4:31b": { id: "gemma4:31b", name: "Gemma 4 31B", family: "gemma", reasoning: true, tool_call: true, attachment: true, limit: { context: 262144, output: 16384 } },
+  "deepseek-v3.2": { id: "deepseek-v3.2", name: "DeepSeek V3.2", family: "deepseek", reasoning: true, tool_call: true, attachment: false, limit: { context: 163840, output: 16384 } },
+  "devstral-small-2:24b": { id: "devstral-small-2:24b", name: "Devstral Small 2 24B", family: "devstral", reasoning: false, tool_call: true, attachment: true, limit: { context: 262144, output: 16384 } },
+  "gemini-3-flash-preview": { id: "gemini-3-flash-preview", name: "Gemini 3 Flash Preview", family: "gemini", reasoning: true, tool_call: true, attachment: true, limit: { context: 1048576, output: 16384 } },
 };
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -194,9 +194,17 @@ async function refreshModels(config) {
   let source;
 
   if (models && models.length > 0) {
-    modelsMap = buildModelsMap(models);
+    print(`Found ${models.length} models. Fetching capabilities for each...`);
+    const showData = {};
+    for (const m of models) {
+      const id = m.name || m.model;
+      if (!id) continue;
+      const show = await fetchModelShow(id, apiKey);
+      if (show) showData[id] = show;
+    }
+    modelsMap = buildModelsMap(models, showData);
     modelNames = models.map((m) => m.name || m.model).filter(Boolean);
-    source = "Ollama API";
+    source = `Ollama API (${Object.keys(showData).length}/${models.length} with capabilities)`;
   } else {
     print("\n⚠️  Could not fetch models from Ollama API — using built-in fallback list.\n");
     modelsMap = FALLBACK_MODELS;
@@ -237,17 +245,74 @@ async function fetchAvailableModels(apiKey) {
   }
 }
 
-function buildModelsMap(models) {
+async function fetchModelShow(modelName, apiKey) {
+  try {
+    const res = await fetch("https://ollama.com/api/show", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      },
+      body: JSON.stringify({ name: modelName }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+function buildModelsMap(models, showData = {}) {
   const map = {};
   for (const m of models) {
     const id = m.name || m.model;
     if (!id) continue;
-    const family = m.details?.family || id.split(/[:/-]/)[0].toLowerCase();
+    const show = showData[id];
+    const caps = show?.capabilities || [];
+    const modelInfo = show?.model_info || {};
+    const hasVision = caps.includes("vision");
+    const hasTools = caps.includes("tools");
+    const hasThinking = caps.includes("thinking");
+
+    // Derive context length from model_info
+    let contextLength = 0;
+    for (const [key, value] of Object.entries(modelInfo)) {
+      if (key.endsWith(".context_length") && typeof value === "number") {
+        contextLength = value;
+        break;
+      }
+    }
+
+    const family = show?.details?.family || m.details?.family || id.split(/[:/-]/)[0].toLowerCase();
     const name = id
       .split(":")[0]
       .replace(/[-_]/g, " ")
       .replace(/\b\w/g, (c) => c.toUpperCase());
-    map[id] = { id, name, family };
+
+    const entry = { id, name, family };
+
+    // Capabilities
+    entry.attachment = hasVision;
+    entry.reasoning = hasThinking;
+    entry.tool_call = hasTools;
+    entry.temperature = true;
+
+    if (hasThinking) {
+      entry.interleaved = { field: "reasoning_content" };
+    }
+
+    // Modalities
+    entry.modalities = {
+      input: ["text", ...(hasVision ? ["image"] : [])],
+      output: ["text"],
+    };
+
+    // Context/limit
+    if (contextLength > 0) {
+      entry.limit = { context: contextLength, output: Math.min(contextLength, 16384) };
+    }
+
+    map[id] = entry;
   }
   return map;
 }
@@ -294,9 +359,17 @@ async function setupPlugin() {
     const models = await fetchAvailableModels(apiKey);
 
     if (models && models.length > 0) {
-      const modelsMap = buildModelsMap(models);
+      print(`Fetched ${models.length} models from Ollama API, fetching capabilities...`);
+      const showData = {};
+      for (const m of models) {
+        const id = m.name || m.model;
+        if (!id) continue;
+        const show = await fetchModelShow(id, apiKey);
+        if (show) showData[id] = show;
+      }
+      const modelsMap = buildModelsMap(models, showData);
       const firstModelId = models[0].name || models[0].model;
-      print(`✓ Fetched ${models.length} models from Ollama API\n`);
+      print(`✓ Fetched ${models.length} models from Ollama API with capabilities\n`);
       await registerPluginInConfig(existingConfig, modelsMap, firstModelId);
       print("✓ Registered plugin in opencode.json\n");
     } else {
