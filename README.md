@@ -94,6 +94,7 @@ The plugin registers a `provider` hook that fetches capabilities from the Ollama
 | `providerId` | string | `"ollama-router"` | Provider ID to intercept |
 | `maxRetries` | number | `1` | How many times to retry the same key before moving to the next |
 | `failWindowMs` | number | `18000000` | Time in ms before retrying a failed key (5 hours) |
+| `shuffle` | boolean | `true` | Randomize key order on each request. Set to `false` to use keys in array order |
 
 ## Environment Variables
 
@@ -112,7 +113,7 @@ Environment keys are merged with keys from the config file.
 ### Key rotation
 
 1. Plugin intercepts all `fetch` calls to the configured provider
-2. Selects a key from your list (randomized order for fair distribution)
+2. Selects a key from your list (randomized order by default, or sequential if `shuffle` is disabled)
 3. Adds `Authorization: Bearer <key>` header
 4. On error (401, 403, 429), retries the same key up to `maxRetries` times
 5. After exhausting retries, moves to the next key

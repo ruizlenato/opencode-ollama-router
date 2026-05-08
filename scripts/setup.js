@@ -67,7 +67,7 @@ async function menu() {
   print("1. Add new API keys");
   print("2. List current keys");
   print("3. Remove a key");
-  print("4. Configure options (fail window, max retries)");
+  print("4. Configure options (fail window, max retries, key order)");
   print("5. Refresh models from Ollama API");
   print("6. Exit\n");
 
@@ -152,20 +152,28 @@ async function removeKey(config) {
 async function configureOptions(config) {
   print("\n⚙️  Configure Options\n");
 
-  const currentRetries = config.maxRetries || 5;
-  const currentFailWindow = config.failWindowMs || 18000000;
+  const currentRetries = config.maxRetries ?? 5;
+  const currentFailWindow = config.failWindowMs ?? 18000000;
+  const currentShuffle = config.shuffle !== false;
 
   print(`Current max retries: ${currentRetries}`);
-  print(`Current fail window: ${currentFailWindow / 1000 / 60} minutes\n`);
+  print(`Current fail window: ${currentFailWindow / 1000 / 60} minutes`);
+  print(`Random key rotation: ${currentShuffle ? "enabled" : "disabled"}\n`);
 
   const newRetries = await question(`Max retries [${currentRetries}]: `);
   const newFailWindow = await question(`Fail window in minutes [${currentFailWindow / 1000 / 60}]: `);
+  const newShuffle = await question(`Random key rotation (y/n) [${currentShuffle ? "y" : "n"}]: `);
 
   if (newRetries) config.maxRetries = parseInt(newRetries) || currentRetries;
   if (newFailWindow) config.failWindowMs = (parseInt(newFailWindow) * 60 * 1000) || currentFailWindow;
+  if (newShuffle.toLowerCase() === "y" || newShuffle.toLowerCase() === "yes") {
+    config.shuffle = true;
+  } else if (newShuffle.toLowerCase() === "n" || newShuffle.toLowerCase() === "no") {
+    config.shuffle = false;
+  }
 
   await writeJson(PLUGIN_CONFIG_PATH, config);
-  print("\n✅ Options updated.");
+  print(`\n✅ Options updated. Random key rotation: ${config.shuffle !== false ? "enabled" : "disabled"}.`);
   await question("\nPress Enter to continue...");
 }
 

@@ -51,6 +51,7 @@ interface OllamaRouterAuthConfig {
   providerId?: string;
   maxRetries?: number;
   failWindowMs?: number;
+  shuffle?: boolean;
   failedKeys?: Record<string, number>;
 }
 
@@ -383,6 +384,7 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
   const providerId = config.providerId || DEFAULT_PROVIDER_ID;
   const maxRetries = getMaxRetries(config);
   const failWindowMs = getFailWindowMs(config);
+  const shuffle = config.shuffle !== false; // default true
 
   const configKeys = getApiKeysFromConfig(config);
   const envKeys = getApiKeysFromEnv();
@@ -427,7 +429,9 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
     );
   };
 
-  let currentKeyIndex = Math.floor(Math.random() * uniqueKeys.length);
+  let currentKeyIndex = shuffle
+    ? Math.floor(Math.random() * uniqueKeys.length)
+    : 0;
 
   function isKeyAvailable(key: string, now: number): boolean {
     const failedAt = failedKeys.get(key);
@@ -439,14 +443,14 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
     return false;
   }
 
-  function getAvailableKeysShuffled(): { index: number; key: string }[] {
+  function getAvailableKeysOrdered(): { index: number; key: string }[] {
     const now = Date.now();
     const available: { index: number; key: string }[] = [];
     for (let i = 0; i < uniqueKeys.length; i++) {
       const key = uniqueKeys[i];
       if (isKeyAvailable(key, now)) available.push({ index: i, key });
     }
-    return shuffleArray(available);
+    return shuffle ? shuffleArray(available) : available;
   }
 
   function getMaskedKeyPreview(key: string): string {
@@ -498,7 +502,7 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
             const signal = init?.signal ?? undefined;
             throwIfAborted(signal);
 
-            const shuffledKeys = getAvailableKeysShuffled();
+            const orderedKeys = getAvailableKeysOrdered();
             const keyErrors: {
               index: number;
               key: string;
@@ -506,7 +510,7 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
               message: string;
             }[] = [];
 
-            for (const { index, key } of shuffledKeys) {
+            for (const { index, key } of orderedKeys) {
               currentKeyIndex = index;
 
               for (let retry = 0; retry < maxRetries; retry++) {
