@@ -590,19 +590,105 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
 
                 const response = await fetch(input, { ...init, headers, signal });
 
-                // Pass streaming (SSE) responses through live so first tokens reach
-                // OpenCode immediately — buffering would stall the UI for minutes
-                // while a model reasons, until OpenCode's chunk/step timeout aborts.
                 const contentType = response.headers.get("content-type") || "";
                 const isEventStream = contentType.includes("text/event-stream");
 
                 let responseBody = "";
                 let responseClone: Response | null = null;
                 if (isEventStream) {
-                  responseClone = response;
+                  // Transform SSE stream: rename delta.reasoning → delta.reasoning_content
+                  // so @ai-sdk/openai-compatible picks up reasoning content correctly.
+                  // Ollama Cloud sends `reasoning` but the AI SDK only parses `reasoning_content`.
+                  // Must buffer lines because fetch chunks can split mid-line.
+                  let lineBuffer = "";
+                  let transformCount = 0;
+                  const decoder = new TextDecoder();
+                  const encoder = new TextEncoder();
+                  const transformStream = new TransformStream({
+                    transform(chunk, controller) {
+                      lineBuffer += typeof chunk === "string"
+                        ? chunk
+                        : decoder.decode(chunk as Uint8Array, { stream: true });
+                      // Emit complete lines; keep the incomplete tail in lineBuffer
+                      const lines = lineBuffer.split("\n");
+                      lineBuffer = lines.pop()!; // last element is always incomplete or ""
+                      for (const line of lines) {
+                        if (!line.startsWith("data: ")) {
+                          controller.enqueue(encoder.encode(line + "\n"));
+                          continue;
+                        }
+                        const jsonStr = line.slice(6);
+                        if (jsonStr === "[DONE]") {
+                          controller.enqueue(encoder.encode(line + "\n"));
+                          continue;
+                        }
+                        try {
+                          const parsed = JSON.parse(jsonStr);
+                          const choices = parsed?.choices;
+                          if (Array.isArray(choices)) {
+                            let needsReSerialize = false;
+                            for (const choice of choices) {
+                              const delta = choice?.delta;
+                              if (!delta || !("reasoning" in delta)) continue;
+                              // Move reasoning → reasoning_content
+                              transformCount++;
+                              delta.reasoning_content = delta.reasoning;
+                              delete delta.reasoning;
+                              needsReSerialize = true;
+                            }
+                            if (needsReSerialize) {
+                              controller.enqueue(encoder.encode("data: " + JSON.stringify(parsed) + "\n"));
+                              continue;
+                            }
+                          }
+                        } catch {
+                          // Malformed JSON — pass through unchanged
+                        }
+                        controller.enqueue(encoder.encode(line + "\n"));
+                      }
+                    },
+                    flush(controller) {
+                      // Flush any remaining buffered data
+                      if (lineBuffer.length > 0) {
+                        controller.enqueue(encoder.encode(lineBuffer));
+                      }
+                    },
+                  });
+                  const transformedBody = response.body!.pipeThrough(transformStream);
+                  // Strip headers that conflict with streaming/transformed body
+                  const safeHeaders = new Headers(response.headers);
+                  safeHeaders.delete("content-length");
+                  safeHeaders.delete("content-encoding");
+                  safeHeaders.delete("transfer-encoding");
+                  responseClone = new Response(transformedBody, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: safeHeaders,
+                  });
                 } else {
                   try {
                     responseBody = await response.text();
+                    // Also rename reasoning → reasoning_content in non-streaming
+                    // JSON responses so the AI SDK picks up reasoning correctly.
+                    try {
+                      const parsed = JSON.parse(responseBody);
+                      const choices = parsed?.choices;
+                      if (Array.isArray(choices)) {
+                        let needsReSerialize = false;
+                        for (const choice of choices) {
+                          const msg = choice?.message;
+                          if (!msg || !("reasoning" in msg)) continue;
+                          msg.reasoning_content = msg.reasoning;
+                          delete msg.reasoning;
+                          needsReSerialize = true;
+                        }
+                        if (needsReSerialize) {
+                          responseBody = JSON.stringify(parsed);
+                        }
+                      }
+                    } catch {
+                      // Not JSON or malformed — leave as-is
+                    }
                     responseClone = new Response(responseBody, {
                       status: response.status,
                       statusText: response.statusText,
