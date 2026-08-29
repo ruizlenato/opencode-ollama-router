@@ -11,6 +11,9 @@ Smart API key router for OpenCode's Ollama Cloud integration. Automatically rota
 - **Automatic Failover** - Automatically rotates to next key when current one fails (401, 403, 429)
 - **Subscription Error Detection** - Detects "model requires a subscription" errors and skips those keys
 - **Auto Recovery** - Re-enables failed keys after configurable time (default: 5 hours)
+- **Instant Reset** - Reset rate-limited keys immediately without restarting OpenCode
+- **Hot Reload** - All config changes (keys, options, models) take effect on the next request — no restart needed
+- **Streaming Fix** - SSE responses pass through live; no buffering stall during long reasoning
 - **Random Key Rotation** - Rotates keys in random order to distribute load evenly
 - **Model Capability Discovery** - Automatically fetches model capabilities (vision, tool call, reasoning) and context window sizes from the Ollama API
 - **Context Usage Tracking** - Supplies context window sizes so OpenCode can display used context percentage
@@ -19,14 +22,54 @@ Smart API key router for OpenCode's Ollama Cloud integration. Automatically rota
 
 ## Installation
 
-### From NPM (recommended)
+### For LLMs / Automated Setup
+
+If you are an LLM agent installing this plugin on a server, follow these steps:
+
+1. **Copy the zip** to the target server (e.g., via `scp`):
+   ```bash
+   scp opencode-ollama-router-1.2.0.zip user@server:/tmp/
+   ```
+
+2. **Unzip and install globally**:
+   ```bash
+   cd /tmp
+   unzip opencode-ollama-router-1.2.0.zip -d opencode-ollama-router
+   cd opencode-ollama-router
+   npm install -g .
+   ```
+
+3. **Run the setup wizard** to add API keys and configure the provider:
+   ```bash
+   opencode-ollama-router-setup
+   ```
+   The setup wizard will:
+   - Prompt for API keys (one per line, empty line to finish)
+   - Write keys to `~/.config/opencode/ollama-router.json`
+   - Register the provider in `~/.config/opencode/opencode.json`
+   - Fetch available models and their capabilities from the Ollama API
+   - Write model definitions into `~/.config/opencode/opencode.json`
+
+4. **Restart OpenCode** (first time only, to load the plugin):
+   ```bash
+   opencode
+   ```
+
+   After the initial restart, **all config changes take effect immediately** — adding/removing keys, changing options, resetting failed keys — no further restarts needed.
+
+5. **Verify** by checking OpenCode logs for `service=ollama-router` entries:
+   ```bash
+   grep ollama-router ~/.local/share/opencode/log/opencode.log | tail -5
+   ```
+
+### Alternative: From NPM
 
 ```bash
 npm install -g opencode-ollama-router
 opencode-ollama-router-setup
 ```
 
-### From GitHub
+### Alternative: From GitHub
 
 ```bash
 git clone https://github.com/ruizlenato/opencode-ollama-router.git
@@ -37,13 +80,14 @@ opencode-ollama-router-setup
 
 ## Configuration
 
-1. Configure API keys in `~/.config/opencode/ollama-router.json`:
+### Config file: `~/.config/opencode/ollama-router.json`
 
 ```json
 {
   "providerId": "ollama-router",
   "maxRetries": 1,
   "failWindowMs": 18000000,
+  "shuffle": true,
   "keys": [
     "your-ollama-api-key-1",
     "your-ollama-api-key-2",
@@ -52,10 +96,26 @@ opencode-ollama-router-setup
 }
 ```
 
-Or run the setup script:
-
+Or run the interactive setup:
 ```bash
 opencode-ollama-router-setup
+```
+
+### OpenCode provider config: `~/.config/opencode/opencode.json`
+
+The setup script adds this provider entry automatically:
+
+```json
+{
+  "provider": {
+    "ollama-router": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://ollama.com/v1"
+      }
+    }
+  }
+}
 ```
 
 ### Available Models
@@ -108,6 +168,33 @@ OLLAMA_API_KEY_2="your-third-key"
 
 Environment keys are merged with keys from the config file.
 
+## Hot Reload (No Restart Needed)
+
+As of v1.2.0, **all configuration changes take effect immediately** on the next API request — no need to restart OpenCode:
+
+- Adding or removing API keys via setup script or config file
+- Changing `maxRetries`, `failWindowMs`, or `shuffle`
+- Resetting failed/rate-limited keys (setup menu option 6)
+- Refreshing model capabilities (setup menu option 5)
+
+The plugin re-reads `ollama-router.json` and `opencode.json` from disk before every request, so any external edit to those files is picked up automatically.
+
+## Setup Script Menu
+
+```
+opencode-ollama-router-setup
+
+1. Add new API keys
+2. List current keys
+3. Remove a key
+4. Configure options (fail window, max retries, key order)
+5. Refresh models from Ollama API
+6. Reset failed keys (clear rate-limit blocks without restart)
+7. Exit
+```
+
+Option 6 shows each rate-limited key with how long it's been blocked and how much cooldown remains, then clears all failed-key state on confirmation.
+
 ## How It Works
 
 ### Key rotation
@@ -118,7 +205,14 @@ Environment keys are merged with keys from the config file.
 4. On error (401, 403, 429), retries the same key up to `maxRetries` times
 5. After exhausting retries, moves to the next key
 6. Subscription errors (e.g., "model requires subscription") are detected and skipped immediately
-7. Failed keys recover after `failWindowMs` expires
+7. Failed keys recover after `failWindowMs` expires, or can be reset instantly via option 6
+
+### Streaming behavior
+
+The plugin detects SSE (`text/event-stream`) responses and passes them through **live** to OpenCode — no buffering. This means:
+- Tokens stream in real-time during generation
+- Long reasoning/thinking phases don't stall or timeout
+- Non-streaming responses (errors, JSON) are still buffered for key-rotation logic
 
 ### Toggling key order
 
@@ -177,7 +271,7 @@ The plugin reads config keys and env vars (`OLLAMA_API_KEY`, `OLLAMA_API_KEY_1`,
 To see detailed logs:
 1. Check OpenCode's log panel for service `ollama-router`
 2. Look for log levels: `info`, `warn`, `error`
-3. Each request logs status code and first 300 chars of response body
+3. Streaming responses log status only (no body buffering); error responses log first 300 chars
 
 ## License
 
