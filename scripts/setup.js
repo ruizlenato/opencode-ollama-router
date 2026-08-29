@@ -114,7 +114,7 @@ async function listKeys(config) {
   if (keys.length === 0) {
     print("No keys configured.");
   } else {
-    keys.forEach((key, i) => print(`  ${i + 1}. ${key.slice(0, 12)}...`));
+    keys.forEach((key, i) => print(`  ${i + 1}. ${key}`));
     print(`\nTotal: ${keys.length} key(s)`);
   }
   await question("\nPress Enter to continue...");
@@ -128,7 +128,7 @@ async function removeKey(config) {
   }
 
   print("\n🗑️  Remove Key\n");
-  keys.forEach((key, i) => print(`  ${i + 1}. ${key.slice(0, 12)}...`));
+  keys.forEach((key, i) => print(`  ${i + 1}. ${key}`));
   print("\nEnter the number to remove (or 0 to cancel):");
 
   const choice = await question("> ");
@@ -145,7 +145,7 @@ async function removeKey(config) {
       await writeJson(AUTH_PATH, auth);
     }
 
-    print(`\n✅ Removed key: ${removed.slice(0, 12)}...`);
+    print(`\n✅ Removed key: ${removed}`);
   }
   await question("\nPress Enter to continue...");
 }
@@ -363,7 +363,7 @@ async function resetFailedKeys(config) {
   for (const [key, failedAt] of Object.entries(failedKeys)) {
     const ago = Math.round((Date.now() - failedAt) / 60000);
     const remaining = Math.max(0, Math.round((config.failWindowMs ?? 18000000 - (Date.now() - failedAt)) / 60000));
-    print(`  ${key.slice(0, 12)}... — failed ${ago}m ago, ${remaining}m remaining`);
+    print(`  ${key} — failed ${ago}m ago, ${remaining}m remaining`);
   }
 
   print("\nResetting will clear all rate-limit blocks immediately.");
