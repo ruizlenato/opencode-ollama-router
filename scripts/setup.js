@@ -69,7 +69,8 @@ async function menu() {
   print("3. Remove a key");
   print("4. Configure options (fail window, max retries, key order)");
   print("5. Refresh models from Ollama API");
-  print("6. Exit\n");
+  print("6. Reset failed keys (clear rate-limit blocks without restart)");
+  print("7. Exit\n");
 
   const choice = await question("Choose an option: ");
   return choice;
@@ -346,6 +347,39 @@ async function registerPluginInConfig(existingConfig, modelsMap, firstModelId) {
   await writeJson(CONFIG_PATH, existingConfig);
 }
 
+async function resetFailedKeys(config) {
+  const failedKeys = config.failedKeys || {};
+  const count = Object.keys(failedKeys).length;
+
+  if (count === 0) {
+    print("\n✅ No failed keys to reset. All keys are healthy.\n");
+    await question("Press Enter to continue...");
+    return;
+  }
+
+  print("\n🔑 Reset Failed Keys\n");
+  print(`Found ${count} failed key(s):\n`);
+
+  for (const [key, failedAt] of Object.entries(failedKeys)) {
+    const ago = Math.round((Date.now() - failedAt) / 60000);
+    const remaining = Math.max(0, Math.round((config.failWindowMs ?? 18000000 - (Date.now() - failedAt)) / 60000));
+    print(`  ${key.slice(0, 12)}... — failed ${ago}m ago, ${remaining}m remaining`);
+  }
+
+  print("\nResetting will clear all rate-limit blocks immediately.");
+  print("The running OpenCode plugin will pick up the change on the next request.\n");
+
+  const confirm = await question("Reset all failed keys? (y/n): ");
+  if (confirm.toLowerCase() === "y" || confirm.toLowerCase() === "yes") {
+    config.failedKeys = {};
+    await writeJson(PLUGIN_CONFIG_PATH, config);
+    print(`\n✅ Reset ${count} failed key(s). All keys are now available.\n`);
+  } else {
+    print("\nCancelled. No changes made.\n");
+  }
+  await question("Press Enter to continue...");
+}
+
 async function setupPlugin() {
   const existingConfig = await readJson(CONFIG_PATH);
 
@@ -431,6 +465,9 @@ async function main() {
         await refreshModels(config);
         break;
       case "6":
+        await resetFailedKeys(config);
+        break;
+      case "7":
         print("\n👋 Goodbye!\n");
         rl.close();
         return;

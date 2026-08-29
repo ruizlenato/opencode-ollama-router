@@ -492,6 +492,38 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
 
   let lastToastKeyIndex = -1;
 
+  async function syncFailedKeysFromDisk(): Promise<void> {
+    try {
+      const content = await readFile(PLUGIN_CONFIG_JSON_PATH, "utf-8");
+      const diskConfig: OllamaRouterAuthConfig = JSON.parse(content);
+      const diskFailed = diskConfig.failedKeys || {};
+
+      // If disk has empty failedKeys, clear the in-memory map (reset triggered by setup script)
+      if (Object.keys(diskFailed).length === 0 && failedKeys.size > 0) {
+        failedKeys.clear();
+        await log("info", "Failed keys reset from disk — all keys reactivated");
+        return;
+      }
+
+      // Sync: remove in-memory entries that are no longer on disk (removed by setup)
+      for (const key of failedKeys.keys()) {
+        if (!(key in diskFailed)) {
+          failedKeys.delete(key);
+        }
+      }
+
+      // Sync: add entries from disk that aren't in memory (added externally)
+      const allowedKeys = new Set(uniqueKeys);
+      for (const [key, failedAt] of Object.entries(diskFailed)) {
+        if (allowedKeys.has(key) && typeof failedAt === "number" && !failedKeys.has(key)) {
+          failedKeys.set(key, failedAt);
+        }
+      }
+    } catch {
+      // Config file may not exist yet — no action needed
+    }
+  }
+
   return {
     auth: {
       provider: providerId,
@@ -501,6 +533,9 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
           async fetch(input: RequestInfo | URL, init?: RequestInit) {
             const signal = init?.signal ?? undefined;
             throwIfAborted(signal);
+
+            // Re-read failed keys from disk before each request (allows runtime reset)
+            await syncFailedKeysFromDisk();
 
             const orderedKeys = getAvailableKeysOrdered();
             const keyErrors: {
