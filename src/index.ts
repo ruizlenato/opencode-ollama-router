@@ -380,45 +380,80 @@ function buildModelEntry(
 }
 
 export const OllamaRouterAuth: Plugin = async ({ client }) => {
-  const config = await readPluginConfig();
-  const providerId = config.providerId || DEFAULT_PROVIDER_ID;
-  const maxRetries = getMaxRetries(config);
-  const failWindowMs = getFailWindowMs(config);
-  const shuffle = config.shuffle !== false; // default true
-
-  const configKeys = getApiKeysFromConfig(config);
-  const envKeys = getApiKeysFromEnv();
-  const allKeys = [...configKeys, ...envKeys];
-  const uniqueKeys = deduplicateKeys(allKeys);
-
-  // Read the opencode.json config to get current model list for provider enrichment
+  // Mutable state — re-read from disk on every request via syncConfigFromDisk()
+  let providerId = DEFAULT_PROVIDER_ID;
+  let maxRetries = DEFAULT_MAX_RETRIES;
+  let failWindowMs = DEFAULT_FAIL_WINDOW_MS;
+  let shuffle = true;
+  let uniqueKeys: string[] = [];
   let staticModels: Record<string, Record<string, unknown>> = {};
-  try {
-    const opencodeJsonPath = join(homedir(), ".config", "opencode", "opencode.json");
-    if (existsSync(opencodeJsonPath)) {
-      const raw = await readFile(opencodeJsonPath, "utf-8");
-      const parsed = JSON.parse(raw);
-      staticModels = parsed?.provider?.[providerId]?.models || {};
-    }
-  } catch {
-    // Non-critical — provider hook will use defaults
-  }
-
-  if (uniqueKeys.length === 0) return {};
-
   let existingConfig: OllamaRouterAuthConfig = {};
-  try {
-    const content = await readFile(PLUGIN_CONFIG_JSON_PATH, "utf-8");
-    existingConfig = JSON.parse(content);
-  } catch {
+  const failedKeys = new Map<string, number>();
+
+  /**
+   * Re-read all config from disk so changes made via the setup script
+   * (adding/removing keys, changing maxRetries, failWindowMs, shuffle,
+   * resetting failed keys, etc.) take effect immediately without restarting
+   * OpenCode.
+   */
+  async function syncConfigFromDisk(): Promise<void> {
+    const config = await readPluginConfig();
+    providerId = config.providerId || DEFAULT_PROVIDER_ID;
+    maxRetries = getMaxRetries(config);
+    failWindowMs = getFailWindowMs(config);
+    shuffle = config.shuffle !== false; // default true
+
+    const configKeys = getApiKeysFromConfig(config);
+    const envKeys = getApiKeysFromEnv();
+    const allKeys = [...configKeys, ...envKeys];
+    uniqueKeys = deduplicateKeys(allKeys);
+
+    // Re-read opencode.json for model list enrichment
+    try {
+      const opencodeJsonPath = join(homedir(), ".config", "opencode", "opencode.json");
+      if (existsSync(opencodeJsonPath)) {
+        const raw = await readFile(opencodeJsonPath, "utf-8");
+        const parsed = JSON.parse(raw);
+        staticModels = parsed?.provider?.[providerId]?.models || {};
+      }
+    } catch {
+      // Non-critical
+    }
+
+    // Re-read state file for failedKeys
+    try {
+      const content = await readFile(PLUGIN_CONFIG_JSON_PATH, "utf-8");
+      existingConfig = JSON.parse(content);
+    } catch {
+      existingConfig = {};
+    }
+
+    // Sync in-memory failedKeys with disk
+    const diskFailed = existingConfig.failedKeys || {};
+
+    // If disk has empty failedKeys, clear the in-memory map (reset triggered by setup script)
+    if (Object.keys(diskFailed).length === 0 && failedKeys.size > 0) {
+      failedKeys.clear();
+    } else {
+      // Remove in-memory entries that are no longer on disk (removed by setup)
+      for (const key of failedKeys.keys()) {
+        if (!(key in diskFailed)) {
+          failedKeys.delete(key);
+        }
+      }
+      // Add entries from disk that aren't in memory
+      const allowedKeys = new Set(uniqueKeys);
+      for (const [key, failedAt] of Object.entries(diskFailed)) {
+        if (allowedKeys.has(key) && typeof failedAt === "number" && !failedKeys.has(key)) {
+          failedKeys.set(key, failedAt);
+        }
+      }
+    }
   }
 
-  const allowedKeys = new Set(uniqueKeys);
-  const failedKeys = new Map<string, number>();
-  for (const [key, failedAt] of Object.entries(existingConfig.failedKeys || {})) {
-    if (allowedKeys.has(key) && typeof failedAt === "number")
-      failedKeys.set(key, failedAt);
-  }
+  // Initial load
+  await syncConfigFromDisk();
+  if (uniqueKeys.length === 0) return {};
 
   const writeState = async () => {
     await mkdir(STATE_DIR, { recursive: true });
@@ -492,38 +527,6 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
 
   let lastToastKeyIndex = -1;
 
-  async function syncFailedKeysFromDisk(): Promise<void> {
-    try {
-      const content = await readFile(PLUGIN_CONFIG_JSON_PATH, "utf-8");
-      const diskConfig: OllamaRouterAuthConfig = JSON.parse(content);
-      const diskFailed = diskConfig.failedKeys || {};
-
-      // If disk has empty failedKeys, clear the in-memory map (reset triggered by setup script)
-      if (Object.keys(diskFailed).length === 0 && failedKeys.size > 0) {
-        failedKeys.clear();
-        await log("info", "Failed keys reset from disk — all keys reactivated");
-        return;
-      }
-
-      // Sync: remove in-memory entries that are no longer on disk (removed by setup)
-      for (const key of failedKeys.keys()) {
-        if (!(key in diskFailed)) {
-          failedKeys.delete(key);
-        }
-      }
-
-      // Sync: add entries from disk that aren't in memory (added externally)
-      const allowedKeys = new Set(uniqueKeys);
-      for (const [key, failedAt] of Object.entries(diskFailed)) {
-        if (allowedKeys.has(key) && typeof failedAt === "number" && !failedKeys.has(key)) {
-          failedKeys.set(key, failedAt);
-        }
-      }
-    } catch {
-      // Config file may not exist yet — no action needed
-    }
-  }
-
   return {
     auth: {
       provider: providerId,
@@ -534,8 +537,14 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
             const signal = init?.signal ?? undefined;
             throwIfAborted(signal);
 
-            // Re-read failed keys from disk before each request (allows runtime reset)
-            await syncFailedKeysFromDisk();
+            // Re-read all config from disk before each request (allows runtime changes without restart)
+            await syncConfigFromDisk();
+
+            if (uniqueKeys.length === 0) {
+              throw new Error(
+                `[${providerId}] No API keys configured. Add keys via opencode-ollama-router-setup or the OLLAMA_API_KEY environment variable.`,
+              );
+            }
 
             const orderedKeys = getAvailableKeysOrdered();
             const keyErrors: {
@@ -735,12 +744,15 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
       },
       methods: [{ type: "api" as const, label: "Ollama Router API" }],
     },
-    provider: {
-      id: providerId,
-      models: async (provider: ProviderV2, ctx: ProviderHookContext) => {
-        // Use the first available key for API calls
-        const authKey = ctx.auth?.type === "api" || ctx.auth?.type === "wellknown" ? (ctx.auth as { key: string }).key : "";
-        const apiKey = authKey || uniqueKeys[0] || "";
+      provider: {
+        id: providerId,
+        models: async (provider: ProviderV2, ctx: ProviderHookContext) => {
+          // Re-read config so model list reflects latest changes without restart
+          await syncConfigFromDisk();
+
+          // Use the first available key for API calls
+          const authKey = ctx.auth?.type === "api" || ctx.auth?.type === "wellknown" ? (ctx.auth as { key: string }).key : "";
+          const apiKey = authKey || uniqueKeys[0] || "";
         const caps = apiKey ? await fetchAllModelCapabilities(apiKey) : {};
 
         const models: Record<string, ModelV2> = {};
