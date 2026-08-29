@@ -546,25 +546,35 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
 
                 const response = await fetch(input, { ...init, headers, signal });
 
+                // Pass streaming (SSE) responses through live so first tokens reach
+                // OpenCode immediately — buffering would stall the UI for minutes
+                // while a model reasons, until OpenCode's chunk/step timeout aborts.
+                const contentType = response.headers.get("content-type") || "";
+                const isEventStream = contentType.includes("text/event-stream");
+
                 let responseBody = "";
                 let responseClone: Response | null = null;
-                try {
-                  responseBody = await response.text();
-                  responseClone = new Response(responseBody, {
-                    status: response.status,
-                    statusText: response.statusText,
-                    headers: response.headers,
-                  });
-                } catch {
+                if (isEventStream) {
                   responseClone = response;
+                } else {
+                  try {
+                    responseBody = await response.text();
+                    responseClone = new Response(responseBody, {
+                      status: response.status,
+                      statusText: response.statusText,
+                      headers: response.headers,
+                    });
+                  } catch {
+                    responseClone = response;
+                  }
                 }
 
-                if (responseClone.status >= 500 || responseClone.status === 200) {
+                if (!isEventStream && (responseClone!.status >= 500 || responseClone!.status === 200)) {
                   await log(
                     "info",
-                    `Response status ${responseClone.status}`,
+                    `Response status ${responseClone!.status}`,
                     {
-                      status: responseClone.status,
+                      status: responseClone!.status,
                       keyIndex: currentKeyIndex + 1,
                       body: responseBody.slice(0, 300),
                     },
@@ -572,28 +582,33 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
                 } else {
                   await log(
                     "info",
-                    `Response status ${responseClone.status}`,
+                    `Response status ${responseClone!.status}`,
                     {
-                      status: responseClone.status,
+                      status: responseClone!.status,
                       keyIndex: currentKeyIndex + 1,
+                      stream: isEventStream || undefined,
                     },
                   );
                 }
 
-                if (isAuthErrorByStatus(responseClone.status)) {
-                const isSubscriptionError = responseBody.includes(
-                  "this model requires a subscription",
-                );
+                if (isAuthErrorByStatus(responseClone!.status)) {
+                  // After streaming has started we cannot retry transparently on a
+                  // different key — bytes were already consumed by the caller.
+                  const isSubscriptionError = isEventStream
+                    ? false
+                    : responseBody.includes(
+                        "this model requires a subscription",
+                      );
 
-                if (isSubscriptionError) {
+                if (!isEventStream && isSubscriptionError) {
                   failedKeys.set(key, Date.now());
                   await writeState();
                   const refMatch = responseBody.match(/ref: ([^)]+)/);
                   await log(
                     "info",
-                    `Model access denied (${responseClone.status})`,
+                    `Model access denied (${responseClone!.status})`,
                     {
-                      status: responseClone.status,
+                      status: responseClone!.status,
                       keyIndex: currentKeyIndex + 1,
                       type: "subscription_error",
                       ref: refMatch?.[1] || "unknown",
@@ -608,25 +623,25 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
                   await writeState();
                   await log(
                     "info",
-                    `Auth/rate-limit error (${responseClone.status})`,
+                    `Auth/rate-limit error (${responseClone!.status})`,
                     {
-                      status: responseClone.status,
+                      status: responseClone!.status,
                       keyIndex: currentKeyIndex + 1,
                     },
                   );
                   await showToast(
                     "warning",
-                    `Key ${currentKeyIndex + 1} failed (${responseClone.status}), trying next...`,
+                    `Key ${currentKeyIndex + 1} failed (${responseClone!.status}), trying next...`,
                   );
                 }
 
                 keyErrors.push({
                     index: currentKeyIndex,
                     key: getMaskedKeyPreview(key),
-                    status: responseClone.status,
+                    status: responseClone!.status,
                     message: isSubscriptionError
                       ? `subscription_error: ref=${responseBody.match(/ref: ([^)]+)/)?.[1] || "unknown"}`
-                      : `auth_error_${responseClone.status}`,
+                      : `auth_error_${responseClone!.status}`,
                   });
 
                   if (failedKeys.size >= uniqueKeys.length) {
@@ -673,7 +688,7 @@ export const OllamaRouterAuth: Plugin = async ({ client }) => {
 
                 await updateKey(key, providerId);
                 await log("debug", `Request successful with key ${getMaskedKeyPreview(key)}`);
-                return responseClone;
+                return responseClone!;
               }
             }
 

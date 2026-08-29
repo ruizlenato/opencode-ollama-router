@@ -1,6 +1,6 @@
 {
   "name": "opencode-ollama-router",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Smart API key router for OpenCode - Ollama Cloud with automatic failover, subscription detection, and intelligent rotation",
   "type": "module",
   "main": "dist/index.js",
