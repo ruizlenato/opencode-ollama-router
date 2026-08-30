@@ -1,6 +1,6 @@
 {
   "name": "opencode-ollama-router",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Smart API key router for OpenCode - Ollama Cloud with automatic failover, subscription detection, and intelligent rotation",
   "type": "module",
   "main": "dist/index.js",
@@ -21,7 +21,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "deploy": "tsc && cp dist/index.js ~/.cache/opencode/packages/opencode-ollama-router/node_modules/opencode-ollama-router/dist/index.js && cp dist/index.js ~/.cache/opencode/packages/opencode-ollama-router@latest/node_modules/opencode-ollama-router/dist/index.js && echo 'Deployed to opencode cache. Restart opencode to apply.'"
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.0.0"
